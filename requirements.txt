@@ -1,0 +1,9 @@
+pyrender
+scipy
+smplx
+human_body_prior==0.8.5.0
+torch==1.1.0
+torchvision==0.3.0
+tqdm
+chumpy
+sklearn
