@@ -8,7 +8,7 @@
   ```
 
 # Usage
-  Download the [smpl models](https://pan.baidu.com/s/1JTiyaxgocJgN2-6lSNE53A), unzip to models folder.
+  Download the [smpl models](https://pan.baidu.com/s/1JTiyaxgocJgN2-6lSNE53A), unzip to models folder.  
   If setup properly, the folder structure should look like:
   ```
     .
@@ -19,7 +19,7 @@
             ├── ##^$$$^%&.pkl
             └── ...
   ```
-  There are some modifications in ```process_densepose.py```.
-  Under the change_cloth project(environment), run```get_IUV.py```, get iuv.npy files.
-  Then, run ```main.py```.
+  There are some modifications in ```process_densepose.py```.  
+  Under the change_cloth project(environment), run```get_IUV.py```, get iuv.npy files.  
+  Then, run ```main.py```.  
   Please find more details in the code.
