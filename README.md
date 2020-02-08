@@ -20,6 +20,6 @@
             └── ...
   ```
   There are some modifications in ```process_densepose.py```.  
-  Under the change_cloth project(environment), run```get_IUV.py```, get iuv.npy files.  
+  Under the change_cloth project(environment), run```get_IUV.py```, get ```iuv.npy``` files.  
   Activate this environment, then run ```main.py```.  
   Please find more details in the code.
