@@ -3,7 +3,8 @@ import copy
 import cv2
 from scipy.io  import loadmat
 import scipy.spatial.distance
-import os 
+import os
+import pickle
 
 
 class DensePoseMethods:
@@ -14,18 +15,14 @@ class DensePoseMethods:
         All_UV_norm: normalize uv, (7829, 2)
         All_vertices: index of smpl vertices, (7829, )
         '''
-        ALP_UV = loadmat( os.path.join(os.path.dirname(__file__), '../DensePoseData/UV_data/UV_Processed.mat')  )
-        self.FaceIndices = np.array( ALP_UV['All_FaceIndices']).squeeze()
-        self.FacesDensePose = ALP_UV['All_Faces']-1
-        self.U_norm = ALP_UV['All_U_norm'].squeeze()
-        self.V_norm = ALP_UV['All_V_norm'].squeeze()
-        self.All_vertices =  ALP_UV['All_vertices'][0]
-        ## Info to compute symmetries.
-        self.SemanticMaskSymmetries = [0,1,3,2,5,4,7,6,9,8,11,10,13,12,14]
-        self.Index_Symmetry_List = [1,2,4,3,6,5,8,7,10,9,12,11,14,13,16,15,18,17,20,19,22,21,24,23];
-        UV_symmetry_filename = os.path.join(os.path.dirname(__file__), '../DensePoseData/UV_data/UV_symmetry_transforms.mat')
-        self.UV_symmetry_transformations = loadmat( UV_symmetry_filename )
-    
+        ALP_UV = pickle.load( open(os.path.join(os.path.dirname(__file__), '../DensePoseData/UV_data/daz_dp_info.pkl'), 'rb'))
+
+        self.FaceIndices = np.array( ALP_UV['All_FaceIndices']).squeeze()+1
+        self.FacesDensePose = ALP_UV['All_Faces']
+        self.U_norm = ALP_UV['All_U'].squeeze()
+        self.V_norm = ALP_UV['All_V'].squeeze()
+        self.All_vertices =  ALP_UV['dazVerts16556to13640']
+
 
     def get_symmetric_densepose(self,I,U,V,x,y,Mask):
         ### This is a function to get the mirror symmetric UV labels.
@@ -177,7 +174,7 @@ class DensePoseMethods:
 
     def FBC2Index(self, FaceIndex):
         ##
-        Vert_indices = self.All_vertices[self.FacesDensePose[FaceIndex]]-1
+        Vert_indices = self.All_vertices[self.FacesDensePose[FaceIndex]]
 
         return Vert_indices
 

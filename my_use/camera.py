@@ -24,7 +24,7 @@ from collections import namedtuple
 import torch
 import torch.nn as nn
 
-from smplx.lbs import transform_mat
+from model.daz import transform_mat
 
 
 PerspParams = namedtuple('ModelOutput',

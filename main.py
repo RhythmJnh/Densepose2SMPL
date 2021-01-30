@@ -8,7 +8,7 @@ import pickle as pk
 import matplotlib.pyplot as plt
 import time
 import os.path as osp
-import smplx
+# import smplx
 import cv2
 from tqdm import tqdm
 from collections import defaultdict
@@ -18,31 +18,27 @@ from my_use import densepose_methods as dp_utils
 from my_use.camera import create_camera
 from my_use import fitting
 from my_use.prior import create_prior
-from human_body_prior.tools.model_loader import load_vposer
+# from human_body_prior.tools.model_loader import load_vposer
 from optimizers import optim_factory
 from sklearn.cluster import KMeans	
 from my_use.utils import render
+from model.daz import DazModel
 
 import torch
 torch.backends.cudnn.enabled = False
 
-focal        = 5000.
-iter_stage   = 5
+focal        = 5000 * 28. / 234.7 * 2
+iter_stage   = 2
 batch_size   = 1
 dtype        = torch.float32
-gender       = 'neutral'
-# gender       = 'female'
+# gender       = 'neutral'
+gender       = 'female'
 # gender       = 'male'
-visualize    = False
+visualize    = True
 
-data_folder  = '/Users/momo/Desktop/dp_com_fit/dp_res_zrn'
-res_folder   = '/Users/momo/Desktop/dp_com_fit/dp_res_zrn_res'
+data_folder  = './test_data'
+res_folder   = './test_res'
 
-vposer_ckpt  = './vposer_v1_0'
-model_folder = '/Users/momo/momo/refer_code/smplx/download/models'
-
-part_segm_path   = ''
-interpenetration = False
 interactive      = True
 
 show_loss        = False
@@ -50,32 +46,21 @@ show_loss_type   = 'pro_loss'
 
 sample_points    = 10
 sample_contours  = 100
-device = torch.device('cpu')
+device = torch.device(f"cuda:{0}")
 
 
-def iuv_fitting(body_model, camera, vposer, \
+def iuv_fitting(body_model, camera, \
 	img_ori, fit_map_xy, face_index, \
 	bary_coords, edge_idxs, map_xy_cam, face_cam, \
 	bary_cam, img_res, param_res, check_body_back, \
-	con_map_xy, face_con, bary_con,\
 	):
-
-	# mean pose
-	pose_embedding = torch.zeros([batch_size, 32], 
-								 dtype=dtype, 
-								 device=device, 
-								 requires_grad=True
-								 )
 
 	# calculate init Z
 	init_t = fitting.guess_init(body_model, 
 								edge_idxs, 
 								dtype=dtype,
 								device=device,
-								pose_embedding=pose_embedding, 
-								vposer=vposer, 
-								model_type='smpl', 
-								focal_length=focal, 
+								focal_length=focal,
 								map_xy_now=map_xy_cam, 
 								face_now=face_cam, 
 								bary_now=bary_cam, 
@@ -89,61 +74,16 @@ def iuv_fitting(body_model, camera, vposer, \
 
 	camera_loss.trans_estimation[:] = init_t	
 
-	# Create the search tree
-	ign_part_pairs = ["9,16", "9,17", "6,16", "6,17", "1,2", "12,22"]
-	max_collisions = 128
-	df_cone_heigh = 0.0001
-	search_tree = None
-	pen_distance = None
-	filter_faces = None
-	if interpenetration:
-		from mesh_intersection.bvh_search_tree import BVH
-		import mesh_intersection.loss as collisions_loss
-		from mesh_intersection.filter_faces import FilterFaces
 
-		assert True, 'Interpenetration term can only be used with CUDA'
-		assert torch.cuda.is_available(), \
-			'No CUDA Device! Interpenetration term can only be used' + \
-			' with CUDA'
-
-		search_tree = BVH(max_collisions=max_collisions)
-
-		pen_distance = \
-			collisions_loss.DistanceFieldPenetrationLoss(
-				sigma=df_cone_heigh, point2plane=False,
-				vectorized=True, penalize_outside=True)
-
-	if part_segm_path and interpenetration:
-		# Read the part segmentation
-		part_segm_fn = os.path.expandvars(part_segm_path)
-		with open(part_segm_fn, 'rb') as faces_parents_file:
-			face_segm_data = pk.load(faces_parents_file,
-											 encoding='latin1')
-		faces_segm = face_segm_data['segm']
-		faces_parents = face_segm_data['parents']
-		# Create the module used to filter invalid collision pairs
-		filter_faces = FilterFaces(
-				faces_segm=faces_segm, faces_parents=faces_parents,
-				ign_part_pairs=ign_part_pairs).to(device=device)
-
-
-	angle_prior = create_prior(prior_type='angle', dtype=dtype)
 	shape_prior = create_prior(prior_type='l2', dtype=dtype)
 
 	loss = fitting.create_loss(loss_type='smplify',
 							   rho=100,
-							   angle_prior=angle_prior,
 							   shape_prior=shape_prior,
-							   interpenetration=interpenetration,
-							   pen_distance=pen_distance,
-							   search_tree=search_tree,
-							   tri_filtering_module=filter_faces,
 							   dtype=dtype,
 							   )
 
 	loss = loss.to(device=device)
-
-	body_mean_pose = torch.zeros([batch_size, 32], dtype=dtype,)
 
 	cam_need_xy = torch.unsqueeze(torch.tensor(map_xy_cam, device=device, dtype=dtype), 0)
 
@@ -151,26 +91,15 @@ def iuv_fitting(body_model, camera, vposer, \
 	gt_coords = bary_coords
 	gt_xy = torch.tensor(fit_map_xy, device=device, dtype=dtype)
 
-	# contours
-	con_faces = face_con
-	con_coords = bary_con
-	con_xy = torch.tensor(con_map_xy, device=device, dtype=dtype)
-
 	# Weights used for the pose prior and the shape prior
 	data_weights = [1.] * 5
 	body_pose_prior_weights = [404, 404, 57.4, 4.78, 4.78]
 	shape_weights = [100, 50, 10, 5, 5]
-	coll_loss_weights = [0, 0, 0, 0.01, 1.]
-	# bending_prior_weights = [404, 404, 57.4, 4.78, 4.78]
 
 	opt_weights_dict = {'data_weight': data_weights,
 						'body_pose_weight': body_pose_prior_weights,
 						'shape_weight': shape_weights,
 						}
-						# 'bending_prior_weight': bending_prior_weights
-
-	if interpenetration:
-		opt_weights_dict['coll_loss_weight'] = coll_loss_weights
 
 	keys = opt_weights_dict.keys()
 	opt_weights = [dict(zip(keys, vals)) for vals in
@@ -189,9 +118,6 @@ def iuv_fitting(body_model, camera, vposer, \
 
 		data_weight = 1000 / H
 		# Reset the parameters to estimate the initial translation of the
-		# body model
-		body_model.reset_params(body_pose=body_mean_pose)
-
 		# The closure passed to the optimizer
 		camera_loss.reset_loss_weights({'data_weight': data_weight})
 
@@ -204,7 +130,9 @@ def iuv_fitting(body_model, camera, vposer, \
 		# Re-enable gradient calculation for the camera translation
 		camera.translation.requires_grad = True
 
-		camera_opt_params = [camera.translation, body_model.global_orient]
+		init_go_pose = torch.zeros([1, 3]).to(device)
+		init_go_pose.requires_grad = True
+		camera_opt_params = [camera.translation, init_go_pose]
 
 		camera_optimizer, camera_create_graph = optim_factory.create_optimizer(
 			camera_opt_params)
@@ -213,10 +141,7 @@ def iuv_fitting(body_model, camera, vposer, \
 		fit_camera = monitor.create_fitting_closure(
 				camera_optimizer, body_model, camera, cam_need_xy,
 				face_cam, bary_cam,
-				camera_loss, create_graph=camera_create_graph,
-				vposer=vposer,
-				pose_embedding=pose_embedding,
-				return_full_pose=False, return_verts=True)
+				camera_loss, create_graph=camera_create_graph, go_pose=init_go_pose)
 		# Step 1: Optimize over the torso joints the camera translation
 		# Initialize the computational graph by feeding the initial translation
 		# of the camera and the initial pose of the body model.
@@ -225,10 +150,7 @@ def iuv_fitting(body_model, camera, vposer, \
 			print("Optimize camera params...")
 		cam_init_loss_val = monitor.run_fitting(camera_optimizer,
 												fit_camera,
-												camera_opt_params, body_model,
-												use_vposer=True,
-												pose_embedding=pose_embedding,
-												vposer=vposer)
+												body_model, go_pose=init_go_pose)
 
 		if interactive:
 			if torch.cuda.is_available():
@@ -239,7 +161,7 @@ def iuv_fitting(body_model, camera, vposer, \
 					cam_init_loss_val))
 
 		if check_body_back:
-			body_orient = body_model.global_orient.detach().cpu().numpy()
+			body_orient = init_go_pose.detach().cpu().numpy()
 			flipped_orient = cv2.Rodrigues(body_orient)[0].dot(
 				cv2.Rodrigues(np.array([0., np.pi, 0]))[0])
 			flipped_orient = cv2.Rodrigues(flipped_orient)[0].ravel()
@@ -249,7 +171,7 @@ def iuv_fitting(body_model, camera, vposer, \
 										  device=device).unsqueeze(dim=0)
 			orientations = [body_orient, flipped_orient]
 		else:
-			orientations = [body_model.global_orient.detach().cpu().numpy()]
+			orientations = [init_go_pose.detach().cpu().numpy()]
 
 		# store here the final error for both orientations,
 		# and pick the orientation resulting in the lowest error
@@ -262,13 +184,12 @@ def iuv_fitting(body_model, camera, vposer, \
 		body_poses = []
 		for or_idx, orient in enumerate(orientations):
 			opt_start = time.time()
-
-			new_params = defaultdict(global_orient=orient,
-									 body_pose=body_mean_pose)
-			body_model.reset_params(**new_params)
-
-			with torch.no_grad():
-				pose_embedding.fill_(0)
+			opt_body_pose = torch.zeros([1, 169, 3]).to(device)
+			opt_go_pose = torch.from_numpy(orient.astype(np.float32)).to(device)
+			opt_betas = torch.zeros([1, 21]).to(device)
+			opt_body_pose.requires_grad=True
+			opt_go_pose.requires_grad=True
+			# opt_betas.requires_grad=True
 
 			# Loss curve
 			plt=None
@@ -280,20 +201,14 @@ def iuv_fitting(body_model, camera, vposer, \
 
 			for opt_idx, curr_weights in enumerate(opt_weights):
 
-				body_params = list(body_model.parameters())
 
-				final_params = list(
-					filter(lambda x: x.requires_grad, body_params))
-
-				final_params.append(pose_embedding)
-
-				body_optimizer, body_create_graph = optim_factory.create_optimizer(
-					final_params,)
+				body_optimizer, body_create_graph = optim_factory.create_optimizer([opt_betas,
+																					opt_go_pose,
+																					opt_body_pose,
+																					camera.translation])
 				body_optimizer.zero_grad()
 
 				curr_weights['data_weight'] = data_weight
-				curr_weights['bending_prior_weight'] = (
-					3.17 * curr_weights['body_pose_weight'])
 
 				loss.reset_loss_weights(curr_weights)
 
@@ -306,13 +221,9 @@ def iuv_fitting(body_model, camera, vposer, \
 					show_loss=show_loss,
 					show_loss_type=show_loss_type,
 					loss=loss, create_graph=body_create_graph,
-					vposer=vposer,
-					use_vposer=True,
-					pose_embedding=pose_embedding,
-					return_verts=True, return_full_pose=True,
-					con_xy=con_xy,
-					con_faces=con_faces,
-					con_coords=con_coords,
+					body_pose=opt_body_pose,
+					go_pose=opt_go_pose,
+					betas=opt_betas,
 					)
 
 				if interactive:
@@ -322,12 +233,12 @@ def iuv_fitting(body_model, camera, vposer, \
 
 				final_loss_val = monitor.run_fitting(
 					body_optimizer,
-					closure, final_params,
+					closure,
 					body_model,
-					pose_embedding=pose_embedding, vposer=vposer,
-					use_vposer=True)
-
-				body_params = list(body_model.parameters())
+				    opt_body_pose,
+					opt_go_pose,
+					opt_betas,
+				)
 
 				if interactive:
 					if torch.cuda.is_available():
@@ -349,45 +260,19 @@ def iuv_fitting(body_model, camera, vposer, \
 				tqdm.write('Body final loss val = {:.5f}'.format(
 					final_loss_val))
 
-			# Get the result of the fitting process
-			# Store in it the errors list in order to compare multiple
-			# orientations, if they exist
-			result = {'camera_' + str(key): val.detach().cpu().numpy()
-					  for key, val in camera.named_parameters()}
-			result.update({key: val.detach().cpu().numpy()
-						   for key, val in body_model.named_parameters()})
-			result['vpose_para'] = pose_embedding.detach().cpu().numpy()
 
-			body_pose = vposer.decode(
-				pose_embedding,
-				output_type='aa').view(1, -1)
-			wrist_pose = torch.zeros([body_pose.shape[0], 6],
-										 dtype=body_pose.dtype,
-										 device=body_pose.device)
-			body_pose = torch.cat([body_pose, wrist_pose], dim=1)
-			body_poses.append(body_pose)
-			result['pose_para'] = body_pose.detach().cpu().numpy()
+		# with open(param_res, 'wb') as result_file:
+		# 	if len(results) > 1:
+		# 		min_idx = (0 if results[0]['loss'] < results[1]['loss']
+		# 				   else 1)
+		# 	else:
+		# 		min_idx = 0
+		# 	pk.dump(results[min_idx]['result'], result_file, protocol=2)
 
-			model_output = body_model(return_verts=True, body_pose=body_pose)
-
-			joints2 = camera(model_output.joints)
-			joints3 = model_output.joints.detach().cpu().numpy()
-			result['joints3'] = joints3
-			result['joints2'] = joints2.detach().cpu().numpy()
-			results.append({'loss': final_loss_val,
-							'result': result})
-
-
-		with open(param_res, 'wb') as result_file:
-			if len(results) > 1:
-				min_idx = (0 if results[0]['loss'] < results[1]['loss']
-						   else 1)
-			else:
-				min_idx = 0
-			pk.dump(results[min_idx]['result'], result_file, protocol=2)
-
-	model_output = body_model(return_verts=True, body_pose=body_poses[min_idx])
-	vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+	vers, _, _ = body_model(global_orient=opt_go_pose,
+							body_pose=opt_body_pose,
+							betas=opt_betas)
+	vertices = vers.detach().cpu().numpy().squeeze()
 
 	color = render(vertices, body_model.faces, camera, 
 				   focal=focal, depth_or_color='color',H=H, W=W)
@@ -444,18 +329,18 @@ def get_contour_pt_face_bary(iuv_png, map_iuv, map_xy):
 	return face_con, bary_con, con_map_xy
 
 
-def get_cam_need(map_iuv, map_xy):
+def get_cam_need(map_iuv, map_xy, iuv_png):
 	# select chest part
-	chest_part = [2, 1]
-	chest_fron = np.where(map_iuv[:,0] == 2)[0]
-	chest_back = np.where(map_iuv[:,0] == 1)[0]
+	chest_part = [3, 8]
+	chest_fron = np.where(map_iuv[:,0] == 3)[0]
+	chest_back = np.where(map_iuv[:,0] == 8)[0]
 
 	check_body_back = len(chest_fron)<len(chest_back)
 
 	sel_cam_part = chest_part[0] if not check_body_back \
 		else chest_part[1]
 
-	sel_cam_total = map_xy[chest_fron] if sel_cam_part == 2 \
+	sel_cam_total = map_xy[chest_fron] if sel_cam_part == chest_part[0] \
 		else map_xy[chest_back]
 
 	# get chest box
@@ -483,6 +368,12 @@ def get_cam_need(map_iuv, map_xy):
 	map_xy_cam = map_xy[edge_index]
 	map_uv_cam = map_iuv[edge_index]
 
+	# for i in range(1, 4):
+	# 	cv2.circle(iuv_png, (map_xy_cam[i][0], map_xy_cam[i][1]), radius=5, color=[255, 0, 0], thickness=3)
+	# 	cv2.imshow('test', iuv_png)
+	# 	cv2.waitKey()
+	# exit()
+
 	face_cam , bary_cam = calculaterFB(map_uv_cam)
 
 	return edge_idxs, face_cam, bary_cam, map_xy_cam, check_body_back
@@ -490,18 +381,18 @@ def get_cam_need(map_iuv, map_xy):
 
 def cvShow(img):
 	cv2.namedWindow('show', 0)
-	cv2.resizeWindow('show', 640, 480)
+	# cv2.resizeWindow('show', 640, 480)
 	cv2.imshow('show', img)
-	cv2.waitKey()
-	cv2.destroyAllWindows()
+	cv2.waitKey(1)
+	# cv2.destroyAllWindows()
 
 
 def drawPts2img(pts, img):
 	import copy
 	draw_img = copy.deepcopy(img)
 	for i in range(pts.shape[0]):
-		cv2.circle(draw_img, (int(pts[i, 0]), int(pts[i, 1])), 1, (0, 0, 255, 255), -1)
-		cv2.putText(draw_img, str(i), (int(pts[i, 0] + 2), int(pts[i, 1])), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1)
+		cv2.circle(draw_img, (int(pts[i, 0]), int(pts[i, 1])), 2, (255, 0, 0, 255), -1)
+		# cv2.putText(draw_img, str(i), (int(pts[i, 0] + 2), int(pts[i, 1])), cv2.FONT_HERSHEY_PLAIN, 1, (0, 0, 255), 1)
 	cvShow(draw_img)
 
 
@@ -522,7 +413,7 @@ def sample_fit_pt_face_bary(map_iuv, map_xy):
 	for i in range(1, 25):
 		part_index = np.where(map_iuv[:,0] == i)[0]
 		part_len = len(part_index)
-		if part_len == 0:
+		if part_len < sample_points*88:
 			part_map.append(None)
 			continue
 
@@ -588,14 +479,16 @@ def calculaterFB(map_iuv):
 def main(app_start, img_ori, img_dp):
 
 	# model initial
-	model_params = dict(model_path=model_folder,
-						create_body_pose=False,
-						create_transl=False,
-						dtype=dtype,
-						)
+	# model_params = dict(model_path=model_folder,
+	# 					create_body_pose=False,
+	# 					create_transl=False,
+	# 					dtype=dtype,
+	# 					)
+	#
+	# smpl = smplx.create(model_type='smpl',
+	# 					gender=gender, **model_params)
+	daz = DazModel()
 
-	smpl = smplx.create(model_type='smpl', 
-						gender=gender, **model_params)
 
 	# load camera
 	camera = create_camera(focal_length_x=focal, 
@@ -603,16 +496,16 @@ def main(app_start, img_ori, img_dp):
 						   dtype=dtype)
 
 	# load vposer
-	vposer, _ = load_vposer(vposer_ckpt,
-							vp_model='snapshot')
+	# vposer, _ = load_vposer(vposer_ckpt,
+	# 						vp_model='snapshot')
 
 	# to device
 	camera = camera.to(device=device)
-	smpl   = smpl.to(device=device)
-	vposer = vposer.to(device=device)
-	vposer.eval()
+	daz   = daz.to(device=device)
+	# vposer = vposer.to(device=device)
+	# vposer.eval()
 
-	# results floder
+	# results folder
 	img_fn = osp.join(res_folder, 'images')
 	param_fn = osp.join(res_folder, 'params')
 
@@ -625,34 +518,37 @@ def main(app_start, img_ori, img_dp):
 	# load iuv map and origin image
 	img_ori = cv2.imread(osp.join(data_folder+'/ori',\
 	 img_ori))
-	# img_ori = img_ori[:,:int(img_ori.shape[1]/2)+1]
 	img_ori = img_ori[...,::-1]/255.0
-	# iuv_png = cv2.imread(osp.join('./test_data1/dp', \
-	# 	img_dp))
-	iuv_png = np.load(osp.join(data_folder+'/dp', \
-		img_dp))
-	# img_res   = osp.join(img_fn, img_dp.replace('.png', '.png'))
-	# param_res = osp.join(param_fn, img_dp.replace('.png', '.pkl'))
-
-	img_res   = osp.join(img_fn, img_dp.replace('.npy', '.png'))
-	param_res = osp.join(param_fn, img_dp.replace('.npy', '.pkl'))
+	iuv_png = cv2.imread(osp.join(data_folder+'/dp', img_dp))
+	img_res   = osp.join(img_fn, img_dp.replace('.png', '.png'))
+	param_res = osp.join(param_fn, img_dp.replace('.png', '.pkl'))
 
 	map_iuv, map_xy = get_map_iuv_xy(iuv_png)
 
-	face_con, bary_con, con_map_xy = get_contour_pt_face_bary(\
-		iuv_png, map_iuv, map_xy)
+	# test = iuv_png[:, :, 0]/24.
+	# cv2.imshow('test', test)
+	# cv2.waitKey()
 
 	# get estimated camera para points
 	edge_idxs, face_cam, bary_cam, map_xy_cam, check_body_back = \
-		get_cam_need(map_iuv, map_xy)
+		get_cam_need(map_iuv, map_xy, iuv_png)
 
 	# sample area and get face index, barycentric
 	face_index, bary_coords, fit_map_xy = sample_fit_pt_face_bary(\
 		map_iuv, map_xy)
 
-	iuv_fitting(body_model=smpl,
+	# drawPts2img(fit_map_xy[0], iuv_png)
+
+	# res = {}
+	# res['face'] = face_index
+	# res['bary'] = bary_coords
+	# res['uvxy'] = fit_map_xy
+	# import pickle
+	# pickle.dump(res, open('check_sample_uv.pkl', 'wb'))
+	# exit()
+
+	iuv_fitting(body_model=daz,
 				camera=camera,
-				vposer=vposer,
 				img_ori=img_ori,
 				fit_map_xy=fit_map_xy,
 				face_index=face_index,
@@ -664,9 +560,6 @@ def main(app_start, img_ori, img_dp):
 				img_res=img_res, 
 				param_res=param_res,
 				check_body_back=check_body_back,
-				con_map_xy=con_map_xy,
-				face_con=face_con,
-				bary_con=bary_con,
 				)
 
 	if interactive:
@@ -676,6 +569,7 @@ def main(app_start, img_ori, img_dp):
 
 if __name__ == '__main__':
 	app_start = time.time()
+	print(torch.cuda.is_available())
 
 	img_ori_p = data_folder+'/ori'
 	img_dp_p = data_folder+'/dp'

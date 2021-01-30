@@ -3,9 +3,9 @@ import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 
-im  = cv2.imread('../DensePoseData/demo_data/demo_im.jpg')
-IUV = cv2.imread('../DensePoseData/infer_out/demo_im_IUV.png')
-INDS = cv2.imread('../DensePoseData/infer_out/demo_im_INDS.png',  0)
+im  = cv2.imread('/home/jnh/workspace/other/dp2smpl_demo/DensePoseData/demo_data_2/im.jpg')
+IUV = cv2.imread('/home/jnh/workspace/other/dp2smpl_demo/DensePoseData/demo_data_2/IUV.png')
+INDS = cv2.imread('/home/jnh/workspace/other/dp2smpl_demo/DensePoseData/demo_data_2/INDS.png',  0)
 
 fig = plt.figure(figsize=[15,15])
 plt.imshow(   np.hstack((IUV[:,:,0]/24. ,IUV[:,:,1]/256. ,IUV[:,:,2]/256.))  )

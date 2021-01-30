@@ -49,7 +49,7 @@ class MeshViewer(object):
         pc = pyrender.PerspectiveCamera(yfov=np.pi / 3.0,
                                         aspectRatio=float(width) / height)
         camera_pose = np.eye(4)
-        camera_pose[:3, 3] = np.array([0, 0, 3])
+        camera_pose[:3, 3] = np.array([0, -0.8, 2.3])
         self.scene.add(pc, pose=camera_pose)
 
         self.viewer = pyrender.Viewer(self.scene, use_raymond_lighting=True,

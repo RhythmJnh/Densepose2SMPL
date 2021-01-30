@@ -32,26 +32,15 @@ def guess_init(model,
                edge_idxs,
                device=None,
                focal_length=5000,
-               pose_embedding=None,
-               vposer=None,
                dtype=torch.float32,
-               model_type='smpl',
-               map_xy_now=None, 
+               map_xy_now=None,
                face_now=None, 
                bary_now=None, 
                ):
 
-    body_pose = vposer.decode(pose_embedding, output_type='aa').view(1, -1)
+    vers, _, _ = model()
 
-    wrist_pose = torch.zeros([body_pose.shape[0], 6],
-                              dtype=body_pose.dtype,
-                              device=body_pose.device)
-    body_pose = torch.cat([body_pose, wrist_pose], dim=1)
-
-    output = model(body_pose=body_pose, return_verts=True,
-                   return_full_pose=False)
-
-    vertices = output.vertices.detach().cpu().numpy()
+    vertices = vers.detach().cpu().numpy()
     surface_pt3 = []
     for i in range(4):
       p = getSmplVer(face_now[i], bary_now[i][0], bary_now[i][1], \
@@ -122,32 +111,8 @@ class FittingMonitor(object):
             np.array(vertex_color).reshape(1, 3),
             [batch_size, 1])
 
-    def run_fitting(self, optimizer, closure, params, body_model,
-                    use_vposer=True, pose_embedding=None, vposer=None, 
+    def run_fitting(self, optimizer, closure, body_model, body_pose=None, go_pose=None, betas=None,
                     ):
-        ''' Helper function for running an optimization process
-            Parameters
-            ----------
-                optimizer: torch.optim.Optimizer
-                    The PyTorch optimizer object
-                closure: function
-                    The function used to calculate the gradients
-                params: list
-                    List containing the parameters that will be optimized
-                body_model: nn.Module
-                    The body model PyTorch module
-                use_vposer: bool
-                    Flag on whether to use VPoser (default=True).
-                pose_embedding: torch.tensor, BxN
-                    The tensor that contains the latent pose variable.
-                vposer: nn.Module
-                    The VPoser module
-            Returns
-            -------
-                loss: float
-                The final loss value
-        '''
-        append_wrists = self.model_type == 'smpl' and use_vposer
         prev_loss = None
         for n in range(self.maxiters):
             loss = optimizer.step(closure)
@@ -167,25 +132,19 @@ class FittingMonitor(object):
                 if loss_rel_change <= self.ftol:
                     break
 
-            # 一阶最优终止容忍度
-            if all([torch.abs(var.grad.view(-1).max()).item() < self.gtol
-                    for var in params if var.grad is not None]):
-                break
+            # # 一阶最优终止容忍度
+            # if all([torch.abs(var.grad.view(-1).max()).item() < self.gtol
+            #         for var in params if var.grad is not None]):
+            #     break
 
             if self.visualize and n % self.summary_steps == 0:
-                body_pose = vposer.decode(
-                    pose_embedding, output_type='aa').view(
-                        1, -1) if use_vposer else None
-
-                if append_wrists:
-                    wrist_pose = torch.zeros([body_pose.shape[0], 6],
-                                             dtype=body_pose.dtype,
-                                             device=body_pose.device)
-                    body_pose = torch.cat([body_pose, wrist_pose], dim=1)
-
-                model_output = body_model(
-                    return_verts=True, body_pose=body_pose)
-                vertices = model_output.vertices.detach().cpu().numpy()
+                if body_pose is not None:
+                    vers, _, _ = body_model(global_orient=go_pose,
+                                            body_pose=body_pose,
+                                            betas=betas)
+                else:
+                    vers, _, _ = body_model(global_orient=go_pose)
+                vertices = vers.detach().cpu().numpy()
 
                 self.mv.update_mesh(vertices.squeeze(),
                                     body_model.faces)
@@ -204,56 +163,43 @@ class FittingMonitor(object):
                                plt=None,
                                show_loss=False,
                                show_loss_type=None,
-                               return_verts=True, return_full_pose=False,
-                               use_vposer=True, vposer=None,
-                               pose_embedding=None,
                                create_graph=False,
-                               con_xy=None,
-                               con_faces=None,
-                               con_coords=None,
+                               body_pose=None,
+                               go_pose=None,
+                               betas=None,
                                ):
-
-        faces_tensor = body_model.faces_tensor.view(-1)
-        append_wrists = self.model_type == 'smpl' and use_vposer
 
         def fitting_func(backward=True):
             if backward:
                 optimizer.zero_grad()
 
-            body_pose = vposer.decode(
-                pose_embedding, output_type='aa').view(
-                    1, -1) if use_vposer else None
-
-            if append_wrists:
-                wrist_pose = torch.zeros([body_pose.shape[0], 6],
-                                         dtype=body_pose.dtype,
-                                         device=body_pose.device)
-                body_pose = torch.cat([body_pose, wrist_pose], dim=1)
-
-            body_model_output = body_model(return_verts=return_verts,
-                                           body_pose=body_pose,
-                                           return_full_pose=return_full_pose)
-            total_loss = loss(body_model_output, camera=camera,
+            if body_pose is not None:
+                vers, _, _ = body_model(global_orient=go_pose,
+                                        body_pose=body_pose,
+                                        betas=betas)
+            else:
+                vers, _, _ = body_model(global_orient=go_pose)
+            total_loss = loss(vers, camera=camera,
                               gt_xy=gt_xy,
                               xy2face_inds=xy2face_inds,
                               xy2bary_coords=xy2bary_coords,
-                              body_model_faces=faces_tensor,
                               plt=plt,
                               show_loss=show_loss,
                               show_loss_type=show_loss_type,
-                              pose_embedding=pose_embedding,
-                              use_vposer=use_vposer,
-                              con_xy=con_xy,
-                              con_faces=con_faces,
-                              con_coords=con_coords,
+                              body_pose=body_pose,
+                              betas=betas,
                               )
             if backward:
                 total_loss.backward(create_graph=create_graph)
             self.steps += 1
             if self.visualize and self.steps % self.summary_steps == 0:
-                model_output = body_model(return_verts=True,
-                                          body_pose=body_pose)
-                vertices = model_output.vertices.detach().cpu().numpy()
+                if body_pose is not None:
+                    vers, _, _ = body_model(global_orient=go_pose,
+                                            body_pose=body_pose,
+                                            betas=betas)
+                else:
+                    vers, _, _ = body_model(global_orient=go_pose)
+                vertices = vers.detach().cpu().numpy()
 
                 self.mv.update_mesh(vertices.squeeze(),
                                     body_model.faces)
@@ -273,33 +219,20 @@ def create_loss(loss_type='smplify', **kwargs):
 
 class SMPLifyLoss(nn.Module):
 
-    def __init__(self, search_tree=None,
-                 pen_distance=None, tri_filtering_module=None,
+    def __init__(self,
                  rho=100,
-                 interpenetration=True, dtype=torch.float32,
-                 angle_prior=None,
+                 dtype=torch.float32,
                  shape_prior=None,
                  data_weight=1.0,
                  body_pose_weight=0.0,
-                 bending_prior_weight=0.0,
                  shape_weight=0.0,
-                 coll_loss_weight=0.0,
-                 reduction='sum',
                  ):
 
         super(SMPLifyLoss, self).__init__()
 
-        self.angle_prior = angle_prior
         self.shape_prior = shape_prior
-
         self.robustifier = utils.GMoF(rho=rho)
         self.rho = rho
-
-        self.interpenetration = interpenetration
-        if self.interpenetration:
-            self.search_tree = search_tree
-            self.tri_filtering_module = tri_filtering_module
-            self.pen_distance = pen_distance
 
         self.register_buffer('data_weight',
                              torch.tensor(data_weight, dtype=dtype))
@@ -307,12 +240,6 @@ class SMPLifyLoss(nn.Module):
                              torch.tensor(body_pose_weight, dtype=dtype))
         self.register_buffer('shape_weight',
                              torch.tensor(shape_weight, dtype=dtype))
-        self.register_buffer('bending_prior_weight',
-                             torch.tensor(bending_prior_weight, dtype=dtype))
-
-        if self.interpenetration:
-            self.register_buffer('coll_loss_weight',
-                                 torch.tensor(coll_loss_weight, dtype=dtype))
 
     def reset_loss_weights(self, loss_weight_dict):
         for key in loss_weight_dict:
@@ -329,15 +256,13 @@ class SMPLifyLoss(nn.Module):
     def forward(self, body_model_output, camera, gt_xy,
                 xy2face_inds,
                 xy2bary_coords,
-                body_model_faces, plt,
-                show_loss, show_loss_type, use_vposer=True, 
-                pose_embedding=None,
-                con_xy=None,
-                con_faces=None,
-                con_coords=None,
+                plt,
+                show_loss, show_loss_type,
+                body_pose=None,
+                betas=None,
                 ):
 
-        vertices = body_model_output.vertices
+        vertices = body_model_output
 
         new_smpl_ver = getSmplVer(xy2face_inds[0], xy2bary_coords[0][0], \
           xy2bary_coords[0][1], xy2bary_coords[0][2], vertices[0])
@@ -351,39 +276,30 @@ class SMPLifyLoss(nn.Module):
 
         pro_new_ver = camera(new_smpl_ver)
 
+        pro_new_ver_np = pro_new_ver.detach().cpu().numpy()[0]
+        gt_xy_np = gt_xy.detach().cpu().numpy()[0]
+        import cv2
+        from main import drawPts2img
+        test_png = cv2.imread('/home/jnh/workspace/Densepose2SMPL/test_data/dp/test_dp.png')
+        for i in range(gt_xy_np.shape[0]):
+            cv2.circle(test_png, (int(gt_xy_np[i, 0]), int(gt_xy_np[i, 1])), 2, (0, 0, 255, 255), -1)
+        drawPts2img(pro_new_ver_np, test_png)
+
         # Calculate the distance of the projected joints from
         # the ground truth 2D detections
         pro_diff = self.robustifier(gt_xy - pro_new_ver)
         pro_loss = (torch.sum(pro_diff) *
                       self.data_weight ** 2)
 
-        con_smpl_ver = getSmplVer(con_faces[0], con_coords[0][0], \
-          con_coords[0][1], con_coords[0][2], vertices[0])
-
-        con_smpl_ver = torch.unsqueeze(con_smpl_ver, 1)
-        for i in range(1, con_xy.shape[1]):
-          p = getSmplVer(con_faces[i], con_coords[i][0], \
-            con_coords[i][1], con_coords[i][2], vertices[0])
-          con_smpl_ver = torch.cat((con_smpl_ver, torch.unsqueeze(p,1)), dim=1)
-        con_smpl_ver = torch.unsqueeze(con_smpl_ver.permute(1, 0), 0)
-
-        pro_con_ver = camera(con_smpl_ver)
-
-        con_diff = self.robustifier(con_xy - pro_con_ver)
-        con_loss = (torch.sum(con_diff) *
-                      self.data_weight ** 2)
-
         # Calculate the loss from the Pose prior
-        pprior_loss = (pose_embedding.pow(2).sum() *
+        pprior_loss = (body_pose.pow(2).sum() *
                        self.body_pose_weight ** 2)
 
-        shape_loss = torch.sum(self.shape_prior(
-          body_model_output.betas)) * self.shape_weight ** 2
+        shape_loss = torch.sum(self.shape_prior(betas)) * self.shape_weight ** 2
 
         # print('pro_loss: {:.4f}'.format(pro_loss))
         # print('pprior_loss: {:.4f}'.format(pprior_loss))
         # print('shape_loss: {:.4f}'.format(shape_loss))
-        # print('con_loss: {:.4f}'.format(con_loss))
 
         # Loss curve
         if show_loss:
@@ -400,42 +316,11 @@ class SMPLifyLoss(nn.Module):
                 plt.plot(time.time(), shape_loss.detach().cpu().numpy(), '.')
                 plt.title('{}:{}'.format(show_loss_type, shape_loss.detach().cpu().numpy()))
                 print('shape_loss: {:.4f}'.format(shape_loss))
-            if show_loss_type == 'con_loss':
-                plt.plot(time.time(), con_loss.detach().cpu().numpy(), '.')
-                plt.title('{}:{}'.format(show_loss_type, con_loss.detach().cpu().numpy()))
-                print('shape_loss: {:.4f}'.format(con_loss))
 
             plt.draw()
             plt.pause(0.1)
 
-        # Calculate the prior over the joint rotations. This a heuristic used
-        # to prevent extreme rotation of the elbows and knees
-        body_pose = body_model_output.full_pose[:, 3:66]
-        angle_prior_loss = torch.sum(
-            self.angle_prior(body_pose)) * self.bending_prior_weight
-
-        pen_loss = 0.0
-        # Calculate the loss due to interpenetration
-        if (self.interpenetration and self.coll_loss_weight.item() > 0):
-            batch_size = 1
-            triangles = torch.index_select(
-                body_model_output.vertices, 1,
-                body_model_faces).view(batch_size, -1, 3, 3)
-
-            with torch.no_grad():
-                collision_idxs = self.search_tree(triangles)
-
-            # Remove unwanted collisions
-            if self.tri_filtering_module is not None:
-                collision_idxs = self.tri_filtering_module(collision_idxs)
-
-            if collision_idxs.ge(0).sum().item() > 0:
-                pen_loss = torch.sum(
-                    self.coll_loss_weight *
-                    self.pen_distance(triangles, collision_idxs))
-
-        total_loss = (pro_loss + pprior_loss + shape_loss +
-                      angle_prior_loss + pen_loss)# + con_loss)
+        total_loss = pro_loss + pprior_loss + shape_loss
 
         return total_loss
 
@@ -475,12 +360,10 @@ class SMPLifyCameraInitLoss(nn.Module):
     def forward(self, body_model_output, camera, gt_xy,
                 xy2face_inds,
                 xy2bary_coords,
-                dtype=torch.float32,
-                device='cuda',
                 **kwargs
                 ):
 
-        vertices = body_model_output.vertices
+        vertices = body_model_output
 
         new_smpl_ver = getSmplVer(xy2face_inds[0], xy2bary_coords[0][0], \
           xy2bary_coords[0][1], xy2bary_coords[0][2], vertices[0])
