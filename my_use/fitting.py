@@ -196,10 +196,8 @@ class FittingMonitor(object):
 
 
     def create_fitting_closure(self,
-                               optimizer, body_model, camera=None,
-                               gt_xy=None, 
-                               xy2face_inds=None,
-                               xy2bary_coords=None,
+                               optimizer, body_model, camera,
+                               target_vertex_tensor, index_smpl_346_tensor,
                                loss=None,
                                plt=None,
                                show_loss=False,
@@ -208,9 +206,6 @@ class FittingMonitor(object):
                                use_vposer=True, vposer=None,
                                pose_embedding=None,
                                create_graph=False,
-                               con_xy=None,
-                               con_faces=None,
-                               con_coords=None,
                                ):
 
         faces_tensor = body_model.faces_tensor.view(-1)
@@ -233,19 +228,14 @@ class FittingMonitor(object):
             body_model_output = body_model(return_verts=return_verts,
                                            body_pose=body_pose,
                                            return_full_pose=return_full_pose)
-            total_loss = loss(body_model_output, camera=camera,
-                              gt_xy=gt_xy,
-                              xy2face_inds=xy2face_inds,
-                              xy2bary_coords=xy2bary_coords,
+            total_loss = loss(body_model_output, camera,
+                              target_vertex_tensor, index_smpl_346_tensor,
                               body_model_faces=faces_tensor,
                               plt=plt,
                               show_loss=show_loss,
                               show_loss_type=show_loss_type,
                               pose_embedding=pose_embedding,
                               use_vposer=use_vposer,
-                              con_xy=con_xy,
-                              con_faces=con_faces,
-                              con_coords=con_coords,
                               )
             if backward:
                 total_loss.backward(create_graph=create_graph)
@@ -326,52 +316,20 @@ class SMPLifyLoss(nn.Module):
                                                  device=weight_tensor.device)
                 setattr(self, key, weight_tensor)
 
-    def forward(self, body_model_output, camera, gt_xy,
-                xy2face_inds,
-                xy2bary_coords,
+    def forward(self, body_model_output, camera,
+                target_vertex_tensor, index_smpl_346_tensor,
                 body_model_faces, plt,
                 show_loss, show_loss_type, use_vposer=True, 
                 pose_embedding=None,
-                con_xy=None,
-                con_faces=None,
-                con_coords=None,
                 ):
 
         vertices = body_model_output.vertices
-
-        new_smpl_ver = getSmplVer(xy2face_inds[0], xy2bary_coords[0][0], \
-          xy2bary_coords[0][1], xy2bary_coords[0][2], vertices[0])
-
-        new_smpl_ver = torch.unsqueeze(new_smpl_ver, 1)
-        for i in range(1, gt_xy.shape[1]):
-          p = getSmplVer(xy2face_inds[i], xy2bary_coords[i][0], \
-            xy2bary_coords[i][1], xy2bary_coords[i][2], vertices[0])
-          new_smpl_ver = torch.cat((new_smpl_ver, torch.unsqueeze(p,1)), dim=1)
-        new_smpl_ver = torch.unsqueeze(new_smpl_ver.permute(1, 0), 0)
-
-        pro_new_ver = camera(new_smpl_ver)
+        source_vertex_tensor = vertices[0, index_smpl_346_tensor]
 
         # Calculate the distance of the projected joints from
         # the ground truth 2D detections
-        pro_diff = self.robustifier(gt_xy - pro_new_ver)
-        pro_loss = (torch.sum(pro_diff) *
-                      self.data_weight ** 2)
-
-        con_smpl_ver = getSmplVer(con_faces[0], con_coords[0][0], \
-          con_coords[0][1], con_coords[0][2], vertices[0])
-
-        con_smpl_ver = torch.unsqueeze(con_smpl_ver, 1)
-        for i in range(1, con_xy.shape[1]):
-          p = getSmplVer(con_faces[i], con_coords[i][0], \
-            con_coords[i][1], con_coords[i][2], vertices[0])
-          con_smpl_ver = torch.cat((con_smpl_ver, torch.unsqueeze(p,1)), dim=1)
-        con_smpl_ver = torch.unsqueeze(con_smpl_ver.permute(1, 0), 0)
-
-        pro_con_ver = camera(con_smpl_ver)
-
-        con_diff = self.robustifier(con_xy - pro_con_ver)
-        con_loss = (torch.sum(con_diff) *
-                      self.data_weight ** 2)
+        pro_diff = self.robustifier(target_vertex_tensor-source_vertex_tensor)
+        pro_loss = (torch.sum(pro_diff) *100 ** 2)
 
         # Calculate the loss from the Pose prior
         pprior_loss = (pose_embedding.pow(2).sum() *
@@ -400,10 +358,6 @@ class SMPLifyLoss(nn.Module):
                 plt.plot(time.time(), shape_loss.detach().cpu().numpy(), '.')
                 plt.title('{}:{}'.format(show_loss_type, shape_loss.detach().cpu().numpy()))
                 print('shape_loss: {:.4f}'.format(shape_loss))
-            if show_loss_type == 'con_loss':
-                plt.plot(time.time(), con_loss.detach().cpu().numpy(), '.')
-                plt.title('{}:{}'.format(show_loss_type, con_loss.detach().cpu().numpy()))
-                print('shape_loss: {:.4f}'.format(con_loss))
 
             plt.draw()
             plt.pause(0.1)
@@ -415,24 +369,6 @@ class SMPLifyLoss(nn.Module):
             self.angle_prior(body_pose)) * self.bending_prior_weight
 
         pen_loss = 0.0
-        # Calculate the loss due to interpenetration
-        if (self.interpenetration and self.coll_loss_weight.item() > 0):
-            batch_size = 1
-            triangles = torch.index_select(
-                body_model_output.vertices, 1,
-                body_model_faces).view(batch_size, -1, 3, 3)
-
-            with torch.no_grad():
-                collision_idxs = self.search_tree(triangles)
-
-            # Remove unwanted collisions
-            if self.tri_filtering_module is not None:
-                collision_idxs = self.tri_filtering_module(collision_idxs)
-
-            if collision_idxs.ge(0).sum().item() > 0:
-                pen_loss = torch.sum(
-                    self.coll_loss_weight *
-                    self.pen_distance(triangles, collision_idxs))
 
         total_loss = (pro_loss + pprior_loss + shape_loss +
                       angle_prior_loss + pen_loss)# + con_loss)
@@ -472,35 +408,24 @@ class SMPLifyCameraInitLoss(nn.Module):
                                              device=weight_tensor.device)
                 setattr(self, key, weight_tensor)
 
-    def forward(self, body_model_output, camera, gt_xy,
-                xy2face_inds,
-                xy2bary_coords,
+    def forward(self, body_model_output, camera,
+                target_vertex_tensor, index_smpl_346_tensor,
                 dtype=torch.float32,
                 device='cuda',
                 **kwargs
                 ):
 
         vertices = body_model_output.vertices
+        source_vertex_tensor = vertices[0, index_smpl_346_tensor]
 
-        new_smpl_ver = getSmplVer(xy2face_inds[0], xy2bary_coords[0][0], \
-          xy2bary_coords[0][1], xy2bary_coords[0][2], vertices[0])
-        new_smpl_ver = torch.unsqueeze(new_smpl_ver, 1)
-        for i in range(1,4):
-          p = getSmplVer(xy2face_inds[i], xy2bary_coords[i][0], \
-            xy2bary_coords[i][1], xy2bary_coords[i][2], vertices[0])
-          new_smpl_ver = torch.cat((new_smpl_ver, torch.unsqueeze(p,1)), dim=1)
-        new_smpl_ver = torch.unsqueeze(new_smpl_ver.permute(1, 0), 0)
+        pro_error = torch.pow(target_vertex_tensor-source_vertex_tensor, 2)
 
-        pro_new_ver = camera(new_smpl_ver)
-
-        pro_error = torch.pow(pro_new_ver - gt_xy, 2)
-
-        joint_loss = torch.sum(pro_error) * self.data_weight ** 2
+        joint_loss = torch.sum(pro_error) * 100 ** 2
 
         depth_loss = 0.0
-        if (self.depth_loss_weight.item() > 0 and self.trans_estimation is not
-                None):
-            depth_loss = self.depth_loss_weight ** 2 * torch.sum((
-                camera.translation[:, 2] - self.trans_estimation[:, 2]).pow(2))
+        # if (self.depth_loss_weight.item() > 0 and self.trans_estimation is not
+        #         None):
+        #     depth_loss = self.depth_loss_weight ** 2 * torch.sum((
+        #         camera.translation[:, 2] - self.trans_estimation[:, 2]).pow(2))
 
         return joint_loss + depth_loss
