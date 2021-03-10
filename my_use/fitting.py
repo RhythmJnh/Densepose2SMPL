@@ -14,7 +14,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from my_use.mesh_viewer import MeshViewer
+# from my_use.mesh_viewer import MeshViewer
 from my_use import utils
 
 
@@ -108,7 +108,8 @@ class FittingMonitor(object):
     def __enter__(self):
         self.steps = 0
         if self.visualize:
-            self.mv = MeshViewer(body_color=self.body_color)
+            # self.mv = MeshViewer(body_color=self.body_color)
+            self.mv = None
         return self
 
     def __exit__(self, exception_type, exception_value, traceback):

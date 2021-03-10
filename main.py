@@ -17,7 +17,6 @@ import os
 import sys
 import numpy as np
 import pickle as pk
-import matplotlib.pyplot as plt
 import time
 import os.path as osp
 import smplx
@@ -35,8 +34,6 @@ from my_use.utils import render
 from utils.daz import DazModel
 
 import torch
-
-torch.backends.cudnn.enabled = False
 
 focal = 5000 * 28. / 234.7000
 iter_stage = 5
@@ -58,22 +55,21 @@ interactive = False
 show_loss = False
 show_loss_type = 'pro_loss'
 
-device = torch.device('cpu')
 
-data_folder = '/media/jnh/Jnh_T5/ihp_data/daz2smpl_5000_data/haonan-dp/dp_release_5000'
-res_folder = '/media/jnh/Jnh_T5/ihp_data/daz2smpl_5000_data/smpl_data'
+data_folder = '/media/jnh/Jnh_T5/ihp_data/daz2smpl_5000_data/mini_data'
+res_folder = '/media/jnh/Jnh_T5/ihp_data/daz2smpl_5000_data/smpl_data_test'
 
 
 def nbd_fitting(body_model, camera, vposer, img, img_res, param_res,
-                index_smpl_346, target_vertex, go_pose, pose_encode, smpl_init_transl):
+                index_smpl_346, target_vertex, go_pose, pose_encode, smpl_init_transl, device):
 
-    target_vertex_tensor = torch.from_numpy(target_vertex)
-    index_smpl_346_tensor = torch.from_numpy(index_smpl_346).long()
+    target_vertex_tensor = torch.from_numpy(target_vertex).to(device)
+    index_smpl_346_tensor = torch.from_numpy(index_smpl_346).long().to(device)
     # mean pose
-    pose_embedding = torch.from_numpy(pose_encode)
+    pose_embedding = torch.from_numpy(pose_encode).to(device)
     pose_embedding.requires_grad = True
 
-    init_t = torch.zeros((1, 3))
+    init_t = torch.zeros((1, 3)).to(device)
     camera_loss = fitting.create_loss('camera_init',
                                       trans_estimation=init_t,
                                       depth_loss_weight=1e2,
@@ -103,7 +99,7 @@ def nbd_fitting(body_model, camera, vposer, img, img_res, param_res,
 
     loss = loss.to(device=device)
 
-    body_mean_pose = torch.from_numpy(pose_encode)
+    body_mean_pose = torch.from_numpy(pose_encode).to(device)
 
     # Weights used for the pose prior and the shape prior
     data_weights = [1.] * 5
@@ -129,13 +125,16 @@ def nbd_fitting(body_model, camera, vposer, img, img_res, param_res,
 
     with fitting.FittingMonitor(visualize=visualize) as monitor:
 
-        img = torch.tensor(img, dtype=dtype)
-        H, W, _ = img.shape
+        # img = torch.tensor(img, dtype=dtype)
+        # H, W, _ = img.shape
+        H, W = 512, 512
 
         data_weight = 1000 / H
         # Reset the parameters to estimate the initial translation of the
         # body model
-        body_model.reset_params(body_pose=body_mean_pose, global_orient=torch.from_numpy(go_pose), transl=torch.from_numpy(smpl_init_transl))
+        body_model.reset_params(body_pose=body_mean_pose,
+                                global_orient=torch.from_numpy(go_pose).to(device),
+                                transl=torch.from_numpy(smpl_init_transl).to(device))
 
         # The closure passed to the optimizer
         camera_loss.reset_loss_weights({'data_weight': data_weight})
@@ -198,7 +197,7 @@ def nbd_fitting(body_model, camera, vposer, img, img_res, param_res,
 
         # store here the final error for both orientations,
         # and pick the orientation resulting in the lowest error
-        results = []
+        results=[]
 
         # Step 2: Optimize the full model
         if interactive:
@@ -318,29 +317,30 @@ def nbd_fitting(body_model, camera, vposer, img, img_res, param_res,
             results.append({'loss': final_loss_val,
                             'result': result})
 
-        with open(param_res, 'wb') as result_file:
-            if len(results) > 1:
-                min_idx = (0 if results[0]['loss'] < results[1]['loss']
-                           else 1)
-            else:
-                min_idx = 0
-            pk.dump(results[min_idx]['result'], result_file, protocol=2)
+        # with open(param_res, 'wb') as result_file:
+        #     if len(results) > 1:
+        #         min_idx = (0 if results[0]['loss'] < results[1]['loss']
+        #                    else 1)
+        #     else:
+        #         min_idx = 0
+        #     pk.dump(results[min_idx]['result'], result_file, protocol=2)
 
-    model_output = body_model(return_verts=True, body_pose=body_poses[min_idx])
-    vertices = model_output.vertices.detach().cpu().numpy().squeeze()
-    smpl_face = body_model.faces
+    # model_output = body_model(return_verts=True, body_pose=body_poses[0])
+    # vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+    # smpl_face = body_model.faces
+
     # import trimesh
     # smpl_mesh = trimesh.Trimesh(vertices, smpl_face)
     # smpl_mesh.export('./smpl.obj')
 
-    color = render(vertices, body_model.faces, camera,
-                   focal=focal, depth_or_color='color', H=H, W=W)
-    color = color.astype(np.float32) / 255.0
-
-    img = img.detach().cpu().numpy()
-    origin_img = img.astype(np.float32) / 255
-    valid_mask = (color[:, :, -1] > 0)[:, :, np.newaxis].astype(np.float32) * 1.0
-    show_img1 = origin_img * (1 - valid_mask) + color[:, :, :3] * valid_mask
+    # color = render(vertices, smpl_face, camera,
+    #                focal=focal, depth_or_color='color', H=H, W=W)
+    # color = color.astype(np.float32) / 255.0
+    #
+    # img = img.detach().cpu().numpy()
+    # origin_img = img.astype(np.float32) / 255
+    # valid_mask = (color[:, :, -1] > 0)[:, :, np.newaxis].astype(np.float32) * 1.0
+    # show_img1 = origin_img * (1 - valid_mask) + color[:, :, :3] * valid_mask
 
     # j2d = joints2.detach().cpu().numpy()[0]
     # drawPts2img(j2d, show_img1)
@@ -348,10 +348,10 @@ def nbd_fitting(body_model, camera, vposer, img, img_res, param_res,
 
     # cv2.imshow('test', show_img1)
     # cv2.waitKey()
-    img = pil_img.fromarray((show_img1 * 255).astype(np.uint8))
-    img.save(img_res)
+    # img = pil_img.fromarray((show_img1 * 255).astype(np.uint8))
+    # img.save(img_res)
 
-    return 0
+    return results[0]
 
 
 def cvShow(img):
@@ -371,7 +371,7 @@ def drawPts2img(pts, img):
     cvShow(draw_img)
 
 
-def main(img_ori, pkl_ori):
+def main(img_ori, pkl_ori, device):
     daz = DazModel('./model')
     with open(pkl_ori, 'rb') as rot:
         para_data = pickle.load(rot)
@@ -424,19 +424,20 @@ def main(img_ori, pkl_ori):
     ren_fn = osp.join(res_folder, 'renders')
     param_fn = osp.join(res_folder, 'params')
 
-    os.makedirs(img_fn, exist_ok=True)
-    os.makedirs(ren_fn, exist_ok=True)
-    os.makedirs(param_fn, exist_ok=True)
+    # os.makedirs(img_fn, exist_ok=True)
+    # os.makedirs(ren_fn, exist_ok=True)
+    # os.makedirs(param_fn, exist_ok=True)
+    # shutil.copy(img_ori, img_fn)
 
-    shutil.copy(img_ori, img_fn)
-
-    img = cv2.imread(img_ori)
+    # img = cv2.imread(img_ori)
+    img=None
     img_name = os.path.basename(img_ori)
 
-    img_res = osp.join(ren_fn, img_name)
+    # img_res = osp.join(ren_fn, img_name)
+    img_res = img_ori.replace('.jpg', '.png')
     param_res = osp.join(param_fn, img_name.replace('.jpg', '.pkl'))
-    if os.path.exists(param_res):
-        return None
+    # if os.path.exists(param_res):
+    #     return None
 
     # prepare fitting data, init pose, init transl, target vertex
     index_smpl_346 = np.loadtxt('./my_use/sample_index_346.txt').astype(np.int32)
@@ -446,17 +447,22 @@ def main(img_ori, pkl_ori):
     daz2smpl_pose_index = np.array([2, 18, 35, 4, 20, 36, 5, 21, 37, 7, 23, 88, 38, 63, 90, 39, 64, 41, 66, 43, 68]).astype(np.uint8)
 
     smpl_init_pose = now_pose[daz2smpl_pose_index]
-    smpl_init_pose = torch.from_numpy(smpl_init_pose.reshape(1, -1))
+    smpl_init_pose = torch.from_numpy(smpl_init_pose.reshape(1, -1)).to(device)
     go_pose = now_pose[0]
     pose_encode = vposer.encode(smpl_init_pose)
     pose_encode = (pose_encode.loc).detach().cpu().numpy()
     smpl_init_transl = now_tran.copy()
 
-    nbd_fitting(smpl, camera, vposer, img, img_res, param_res,
-                index_smpl_346, target_vertex, go_pose, pose_encode, smpl_init_transl)
+    now_data = nbd_fitting(smpl, camera, vposer, img, img_res, param_res,
+                index_smpl_346, target_vertex, go_pose, pose_encode, smpl_init_transl, device)
 
 
-def mul_pro(all_list):
+    para_data['smpl_data'] = now_data
+    pickle.dump(para_data, open(pkl_ori, 'wb'))
+
+
+def mul_pro(all_list, gpu_id=None):
+    device = torch.device('cuda:%d'%gpu_id)
     for i in tqdm(range(len(all_list))):
 
         img_ori = all_list[i]
@@ -467,7 +473,7 @@ def mul_pro(all_list):
             continue
         # print(img_ori)
         try:
-            main(img_ori, pkl_ori)
+            main(img_ori, pkl_ori, device)
         except:
             pass
 
@@ -479,16 +485,23 @@ if __name__ == '__main__':
     import random
     random.shuffle(daz_data_list)
 
-    thread_num = 1
+    gpu_list = [0, 1]
+    thread_num = 2 * len(gpu_list)
     split_list = np.array_split(daz_data_list, thread_num)
 
     from multiprocessing import Process
     process_list = []
     for idx in range(thread_num):
-        p = Process(target=mul_pro, args=([split_list[idx]]))
+        gpu_id = gpu_list[idx % len(gpu_list)]
+        p = Process(target=mul_pro, args=(split_list[idx], gpu_id))
         process_list.append(p)
         p.start()
 
     for idx in range(len(process_list)):
         process_list[idx].join()
+
+
+
+
+
 

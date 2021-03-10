@@ -7,7 +7,7 @@ import pickle
 
 if __name__ == '__main__':
 
-    data = pickle.load(open('/home/jnh/workspace/workspace_bak/Densepose2SMPL/test_res/params/mada_part1--mada_001001.pkl', 'rb'))
+    data = pickle.load(open('/media/jnh/Jnh_T5/ihp_data/daz2smpl_5000_data/mini_data/0ce6a276cc7403723c090e14e32ea0d1.pickle', 'rb'))
     a = 1
     # mv = MeshViewer()
     # index_smpl_346 = np.loadtxt('./my_use/sample_index_346.txt').astype(np.int32)
