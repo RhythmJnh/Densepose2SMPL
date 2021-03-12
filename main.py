@@ -333,10 +333,10 @@ def nbd_fitting(body_model, camera, vposer, img, img_res, param_res,
     # smpl_mesh = trimesh.Trimesh(vertices, smpl_face)
     # smpl_mesh.export('./smpl.obj')
 
-    # color = render(vertices, smpl_face, camera,
-    #                focal=focal, depth_or_color='color', H=H, W=W)
-    # color = color.astype(np.float32) / 255.0
-    #
+    color = render(vertices, smpl_face, camera,
+                   focal=focal, depth_or_color='color', H=H, W=W)
+    color = color.astype(np.float32) / 255.0
+
     # img = img.detach().cpu().numpy()
     # origin_img = img.astype(np.float32) / 255
     # valid_mask = (color[:, :, -1] > 0)[:, :, np.newaxis].astype(np.float32) * 1.0
