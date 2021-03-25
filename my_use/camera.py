@@ -124,4 +124,7 @@ class PerspectiveCamera(nn.Module):
                                projected_points[:, :, 2].unsqueeze(dim=-1))
         img_points = torch.einsum('bki,bji->bjk', [camera_mat, img_points]) \
             + self.center.unsqueeze(dim=1)
+
+        projected_points_d = points[:, :, 2].unsqueeze(-1)
+        img_points = torch.cat((img_points, projected_points_d), dim=-1)
         return img_points
